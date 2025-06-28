@@ -6,10 +6,10 @@ including OAuth integration with Google and user management.
 """
 
 from typing import Optional, Dict, Any
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Response, Cookie
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from pydantic import BaseModel, Field, EmailStr, validator
+from pydantic import BaseModel, Field, EmailStr, field_validator, ConfigDict
 import httpx
 from loguru import logger
 import jwt
@@ -60,15 +60,13 @@ class UserInDB(UserBase):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 class UserResponse(UserBase):
     """User response model."""
     id: int
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
 
 class GoogleAuthRequest(BaseModel):
     """Google OAuth authentication request."""
@@ -90,12 +88,12 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     to_encode = data.copy()
     
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = datetime.now(UTC) + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+        expire = datetime.now(UTC) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     
     to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm="HS256")
+    encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     
     return encoded_jwt
 
@@ -120,7 +118,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
     )
     
     try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         email: str = payload.get("email")
         
         if email is None:
@@ -148,8 +146,8 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
         name=token_data.name,
         picture=token_data.picture,
         is_active=True,
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow()
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC)
     )
     
     if user is None:
@@ -249,7 +247,7 @@ async def google_login(request: GoogleAuthRequest, response: Response, db: Sessi
                 expires_delta=access_token_expires
             )
             
-            expires_at = int((datetime.utcnow() + access_token_expires).timestamp())
+            expires_at = int((datetime.now(UTC) + access_token_expires).timestamp())
             
             # Set token as HTTP-only cookie
             response.set_cookie(

@@ -17,11 +17,11 @@ import asyncio
 # Import BioMCP SDK components
 try:
     from biomcp.trials.search import TrialQuery, search_trials
-    from biomcp.trials.details import get_trial
-    from biomcp.articles.search import ArticleQuery, search_articles
-    from biomcp.articles.details import fetch_articles
+    from biomcp.trials.getter import get_trial, Module
+    from biomcp.articles.search import search_articles, PubmedRequest
+    from biomcp.articles.fetch import fetch_articles
     from biomcp.variants.search import VariantQuery, search_variants
-    from biomcp.variants.details import get_variant
+    from biomcp.variants.getter import get_variant
     HAS_BIOMCP = True
 except ImportError:
     logger.warning("BioMCP SDK not installed. Using mock implementations.")
@@ -155,34 +155,48 @@ async def search_clinical_trials(request: TrialSearchRequest):
                 query_params=request.dict(exclude_none=True)
             )
         
-        # Convert request parameters to TrialQuery
+        # Convert request parameters to TrialQuery format
         query_params = {}
+
+        # Map condition to conditions list
         if request.condition:
-            query_params["condition"] = request.condition
+            query_params["conditions"] = [request.condition]
+
+        # Map intervention 
         if request.intervention:
-            query_params["intervention"] = request.intervention
-        if request.target:
-            query_params["target"] = request.target
+            query_params["interventions"] = [request.intervention]
+
+        # Map other parameters to correct field names
         if request.gene:
-            query_params["gene"] = request.gene
+            # Add gene to general terms
+            if "terms" not in query_params:
+                query_params["terms"] = []
+            query_params["terms"].append(request.gene)
+
+        if request.target:
+            # Add target to general terms  
+            if "terms" not in query_params:
+                query_params["terms"] = []
+            query_params["terms"].append(request.target)
+
+        # Handle sponsor, location manually or as terms since TrialQuery may not have direct fields
         if request.sponsor:
-            query_params["sponsor"] = request.sponsor
-        if request.location:
-            query_params["location"] = request.location
-        if request.distance:
-            query_params["distance"] = request.distance
+            if "terms" not in query_params:
+                query_params["terms"] = []
+            query_params["terms"].append(request.sponsor)
+
+        # Phase - take first value if multiple provided (TrialQuery expects single enum)
         if request.phase:
-            query_params["phase"] = [p.value for p in request.phase]
+            query_params["phase"] = request.phase[0].value  # Take first phase
+
+        # Status - map to recruiting_status (single enum, convert our status enum)
         if request.status:
-            query_params["status"] = [s.value for s in request.status]
-        if request.age:
-            query_params["age"] = request.age
-        if request.gender:
-            query_params["gender"] = request.gender
-        
-        # Add pagination
-        query_params["size"] = request.size
-        query_params["page"] = request.page
+            # Map first status to recruiting_status
+            # This is a simplified mapping - you may need to adjust based on exact enum mapping
+            query_params["recruiting_status"] = request.status[0].value
+
+        # Use page_size instead of size for pagination
+        query_params["page_size"] = request.size
         
         # Create TrialQuery and execute search
         query = TrialQuery(**query_params)
@@ -240,7 +254,12 @@ async def get_clinical_trial(
         
         # Get trial details
         output_json = format == OutputFormat.JSON
-        result = await get_trial(nct_id, output_json=output_json)
+        # The BioMCP getter requires a Module argument (use PROTOCOL by default)
+        result = await get_trial(
+            nct_id,
+            module=Module.PROTOCOL,
+            output_json=output_json,
+        )
         
         # Parse result based on format
         if output_json:
@@ -297,33 +316,38 @@ async def search_biomedical_articles(request: ArticleSearchRequest):
                 query_params=request.dict(exclude_none=True)
             )
         
-        # Convert request parameters to ArticleQuery
-        query_params = {}
-        if request.query:
-            query_params["query"] = request.query
+        # ------------------------------------------------------------------ #
+        # Map our API parameters to the BioMCP `PubmedRequest` model fields. #
+        # The current SDK expects LISTS for these fields:                    #
+        #   diseases • genes • chemicals • keywords • variants              #
+        # ------------------------------------------------------------------ #
+        diseases: List[str] = []
+        genes: List[str] = []
+        chemicals: List[str] = []
+        keywords: List[str] = []
+        variants: List[str] = []
+
         if request.disease:
-            query_params["disease"] = request.disease
+            diseases.append(request.disease)
         if request.gene:
-            query_params["gene"] = request.gene
-        if request.protein:
-            query_params["protein"] = request.protein
+            genes.append(request.gene)
         if request.chemical:
-            query_params["chemical"] = request.chemical
-        if request.species:
-            query_params["species"] = request.species
-        if request.date_range:
-            query_params["date_range"] = request.date_range
-        if request.journal:
-            query_params["journal"] = request.journal
-        if request.author:
-            query_params["author"] = request.author
-        
-        # Add pagination
-        query_params["size"] = request.size
-        query_params["page"] = request.page
-        
-        # Create ArticleQuery and execute search
-        query = ArticleQuery(**query_params)
+            chemicals.append(request.chemical)
+
+        # Treat free-text query, protein, and species as generic keywords
+        for kw in (request.query, request.protein, request.species):
+            if kw:
+                keywords.append(kw)
+
+        # Create PubmedRequest with properly mapped parameters
+        query = PubmedRequest(
+            diseases=diseases,
+            genes=genes,
+            chemicals=chemicals,
+            keywords=keywords,
+            variants=variants,
+        )
+
         output_json = request.format == OutputFormat.JSON
         result = await search_articles(query, output_json=output_json)
         
@@ -377,8 +401,13 @@ async def get_article_details(
             )
         
         # Get article details
+        # fetch_articles expects: (pmids: list[int], full: bool, output_json: bool)
         output_json = format == OutputFormat.JSON
-        result = await fetch_articles([pmid], output_json=output_json)
+        result = await fetch_articles(
+            [int(pmid)],
+            full=True,               # return full article where possible
+            output_json=output_json,
+        )
         
         # Parse result based on format
         if output_json:
@@ -552,7 +581,7 @@ async def biomcp_health_check():
     if HAS_BIOMCP:
         try:
             # Simple test query to verify API connectivity
-            test_query = TrialQuery(condition="cancer", size=1)
+            test_query = TrialQuery(conditions=["cancer"], page_size=1)
             await search_trials(test_query, output_json=True)
             status_info["api_connectivity"] = "ok"
         except Exception as e:

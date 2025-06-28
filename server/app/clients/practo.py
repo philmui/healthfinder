@@ -11,7 +11,13 @@ import httpx
 from loguru import logger
 
 from app.core.config import settings
-from app.api.providers import DoctorDetails, Location, ProviderSpecialty, ProviderType, SearchProviderRequest
+from app.models import (
+    DoctorDetails,
+    Location,
+    ProviderSpecialty,
+    ProviderType,
+    SearchProviderRequest,
+)
 
 def _transform_doctor_data(doctor_data: Dict[str, Any]) -> DoctorDetails:
     """

@@ -8,7 +8,8 @@ loading values from environment variables with sensible defaults.
 import os
 import secrets
 from typing import List, Optional, Union, Dict, Any
-from pydantic import BaseSettings, PostgresDsn, validator, AnyHttpUrl, Field
+from pydantic import field_validator, AnyHttpUrl, Field, ConfigDict
+from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
@@ -22,7 +23,7 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "HealthFinder"
     API_V1_STR: str = "/api/v1"
     SECRET_KEY: str = os.getenv("SECRET_KEY", secrets.token_urlsafe(32))
-    DEBUG: bool = os.getenv("DEBUG", "False").lower() == "true"
+    DEBUG: bool = Field(default=False)
     HOST: str = os.getenv("HOST", "0.0.0.0")
     PORT: int = int(os.getenv("PORT", "8000"))
     
@@ -45,22 +46,34 @@ class Settings(BaseSettings):
     POSTGRES_PASSWORD: str = os.getenv("POSTGRES_PASSWORD", "postgres")
     POSTGRES_DB: str = os.getenv("POSTGRES_DB", "healthfinder")
     POSTGRES_PORT: str = os.getenv("POSTGRES_PORT", "5432")
-    POSTGRES_URL: Optional[PostgresDsn] = None
+    POSTGRES_URL: Optional[str] = None
     
-    @validator("POSTGRES_URL", pre=True)
-    def assemble_postgres_url(cls, v: Optional[str], values: Dict[str, Any]) -> Any:
-        """Build PostgreSQL connection URL from individual components."""
-        if isinstance(v, str):
+    @field_validator("DEBUG", mode="before")
+    @classmethod
+    def parse_debug(cls, v: Any) -> bool:
+        """Parse DEBUG value to boolean."""
+        if isinstance(v, bool):
             return v
-        
-        return PostgresDsn.build(
-            scheme="postgresql",
-            user=values.get("POSTGRES_USER"),
-            password=values.get("POSTGRES_PASSWORD"),
-            host=values.get("POSTGRES_SERVER"),
-            port=values.get("POSTGRES_PORT"),
-            path=f"/{values.get('POSTGRES_DB') or ''}",
-        )
+        if isinstance(v, str):
+            return v.lower() in ("true", "1", "yes", "on")
+        return False
+
+    @field_validator("POSTGRES_URL", mode="before")
+    @classmethod
+    def assemble_postgres_url(cls, v: Optional[str], info) -> Any:
+        """Build PostgreSQL connection URL from individual components."""
+        if isinstance(v, str) and v:
+            return v
+
+        # Access other field values from the validation info
+        data = info.data if hasattr(info, 'data') else {}
+        user = data.get("POSTGRES_USER", os.getenv("POSTGRES_USER", "postgres"))
+        password = data.get("POSTGRES_PASSWORD", os.getenv("POSTGRES_PASSWORD", "postgres"))
+        host = data.get("POSTGRES_SERVER", os.getenv("POSTGRES_SERVER", "localhost"))
+        port = data.get("POSTGRES_PORT", os.getenv("POSTGRES_PORT", "5432"))
+        db = data.get("POSTGRES_DB", os.getenv("POSTGRES_DB", "healthfinder"))
+
+        return f"postgresql://{user}:{password}@{host}:{port}/{db}"
     
     # Authentication settings
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 8  # 8 days
@@ -69,11 +82,15 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_ID: str = os.getenv("GOOGLE_CLIENT_ID", "")
     GOOGLE_CLIENT_SECRET: str = os.getenv("GOOGLE_CLIENT_SECRET", "")
     
+    # OpenAI settings (for BioMCP and other AI features)
+    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
+    OPENAI_ORG_ID: str = os.getenv("OPENAI_ORG_ID", "")
+    
     # API keys for external services
     BIOMCP_API_KEY: str = os.getenv("BIOMCP_API_KEY", "")
     PUBMED_API_KEY: str = os.getenv("PUBMED_API_KEY", "")
     CLINICALTRIALS_API_KEY: str = os.getenv("CLINICALTRIALS_API_KEY", "")
-    BETTERDOCTOR_API_KEY: str = os.getenv("BETTERDOCTOR_API_KEY", "")
+    # NPPES API is public and doesn't require an API key
     PRACTO_API_KEY: str = os.getenv("PRACTO_API_KEY", "")
     PRACTO_CLIENT_ID: str = os.getenv("PRACTO_CLIENT_ID", "")
     ORPHADATA_API_KEY: str = os.getenv("ORPHADATA_API_KEY", "")
@@ -83,11 +100,12 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     LOG_FORMAT: str = "{time:YYYY-MM-DD HH:mm:ss} | {level} | {message} | {extra}"
     
-    class Config:
-        """Pydantic configuration for Settings."""
-        case_sensitive = True
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+    model_config = ConfigDict(
+        case_sensitive=True,
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore"
+    )
 
 
 # Create a global settings instance

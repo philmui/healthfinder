@@ -8,8 +8,7 @@ supporting both SQLite and PostgreSQL databases.
 import os
 import sqlalchemy
 from sqlalchemy import create_engine, MetaData
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import declarative_base, sessionmaker
 from databases import Database
 from loguru import logger
 from pathlib import Path
